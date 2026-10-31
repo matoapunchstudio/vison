@@ -3,3 +3,5 @@ Pre-flight: T2 types/geometry consumed by T3/T6/T7 — signatures as in plan, no
 Task 1: complete - cli tests green after editable install fix (empty first wheel)
 Task 2: complete
 Task 3: complete
+Task 4: complete
+Task 4: Ruling: registry-conformance (manifest->node class) test deferred to Task 7 when runner factories exist — manifests only in Task 4 — cost if wrong: a manifest without implementation would pass validation until Task 7 wiring lands.
