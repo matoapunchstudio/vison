@@ -5,3 +5,4 @@ Task 2: complete
 Task 3: complete
 Task 4: complete
 Task 4: Ruling: registry-conformance (manifest->node class) test deferred to Task 7 when runner factories exist — manifests only in Task 4 — cost if wrong: a manifest without implementation would pass validation until Task 7 wiring lands.
+Task 5: complete (Labkom frame: 2 usable faces measured)

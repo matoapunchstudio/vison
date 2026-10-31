@@ -15,6 +15,7 @@ dependencies = [
     "opencv-python-headless>=5.0.0.93",
     "pyyaml>=6.0.3",
     "supervision>=0.31.3",
+    "trackers>=2.6.1",
 ]
 
 [project.scripts]
