@@ -187,6 +187,195 @@ def _check_zone_refs(nodes: list[NodeSpec], zones: dict[str, Polygon]) -> None:
                 raise PipelineSpecError(f"node {n.name} references unknown zone: {r}")
 
 
+# ---------------------------------------------------------------------------
+# Runner (Task 7). One generic execution path for every pipeline document:
+# frame plane nodes (detect/track/face) produce enriched observations;
+# activity nodes (sequence/dwell) turn them into events; gate and debounce
+# filter; the emitter persists + delivers. Use-case knowledge exists only in
+# node config and zone geometry, never here.
+# ---------------------------------------------------------------------------
+
+RUNNER_NODE_TYPES = frozenset(REGISTRY)
+
+
+@dataclass
+class RunStats:
+    frames: int = 0
+    events: int = 0
+
+
+@dataclass
+class _TrackFace:
+    best_embedding: Any = None
+    best_quality: float = -1.0
+    max_width: float = 0.0
+    seen_face: bool = False
+    identity: str | None = None
+    identity_score: float | None = None
+    entry_event_id: str | None = None
+    entry_identity_was_none: bool = False
+    resolved_emitted: bool = False
+
+
+class PipelineRunner:
+    """Executes a validated PipelineSpec over an iterable of (ts, frame_bgr)."""
+
+    def __init__(self, spec: PipelineSpec, detector, encoder, gallery, emitter,
+                 machine_id: str = "dev-pc", recorder=None):
+        from vision_platform.events import (Debouncer, DwellDetector, Gate,
+                                            SequenceDetector, ZoneSet)
+        from vision_platform.track import ByteTrackAdapter
+
+        self.spec = spec
+        self.detector = detector
+        self.encoder = encoder
+        self.gallery = gallery
+        self.emitter = emitter
+        self.machine_id = machine_id
+        self.recorder = recorder
+        self.pipeline_label = f"{spec.name}@1"
+
+        fps = float(spec.source.get("analytics_fps", 5))
+        self._tracker = ByteTrackAdapter(camera_id=spec.camera_id, frame_rate=int(fps))
+        activity_nodes = spec.nodes_of_type("zone.sequence", "zone.dwell")
+        anchor = activity_nodes[0].config.get("anchor", "foot") if activity_nodes else "foot"
+        self._zones = ZoneSet(spec.zones, anchor=anchor)
+        self._activities = []
+        for n in activity_nodes:
+            if n.type == "zone.sequence":
+                self._activities.append(SequenceDetector(
+                    order=list(n.config["order"]), within_s=float(n.config["within_s"]),
+                    event_type=str(n.config["event_type"])))
+            else:
+                self._activities.append(DwellDetector(
+                    zone=str(n.config["zone"]), min_dwell_s=float(n.config["min_dwell_s"]),
+                    event_type=str(n.config["event_type"])))
+        self._gates = [Gate(list(n.config.get("conditions") or []))
+                       for n in spec.nodes_of_type("condition.gate")]
+        deb = spec.nodes_of_type("debounce")
+        self._debouncer = Debouncer(float(deb[0].config["cooldown_s"])) if deb else None
+        self._face_enabled = encoder is not None and bool(spec.nodes_of_type("face.encode"))
+        match = spec.nodes_of_type("face.match")
+        self._match_threshold = float(match[0].config.get("match_threshold", 0.5)) if match else 0.5
+        enc = spec.nodes_of_type("face.encode")
+        self._min_face_px = float(enc[0].config.get("min_face_px", 40)) if enc else 40.0
+        self._face_state: dict[int, _TrackFace] = {}
+        self._identity_owner: dict[str, int] = {}
+
+    # -- face association ----------------------------------------------------
+    def _enrich(self, observations, frame):
+        from dataclasses import replace
+
+        if not self._face_enabled or not observations:
+            return observations, set()
+        hits = self.encoder.embed(frame)
+        just_resolved: set[int] = set()
+        enriched = []
+        for obs in observations:
+            state = self._face_state.setdefault(obs.track_id, _TrackFace())
+            x1, y1, x2, y2 = obs.bbox
+            inside = [h for h in hits
+                      if x1 <= (h.bbox[0] + h.bbox[2]) / 2 <= x2
+                      and y1 <= (h.bbox[1] + h.bbox[3]) / 2 <= y2]
+            if inside:
+                best = max(inside, key=lambda h: h.quality)
+                state.seen_face = True
+                state.max_width = max(state.max_width, best.bbox[2] - best.bbox[0])
+                if best.quality > state.best_quality:
+                    state.best_quality = best.quality
+                    state.best_embedding = best.embedding
+                    if self.gallery is not None and state.identity is None:
+                        hit = self.gallery.identify_with_model(
+                            best.embedding, self.encoder.model_id, self._match_threshold)
+                        if hit is not None:
+                            state.identity, state.identity_score = hit
+                            just_resolved.add(obs.track_id)
+            enriched.append(replace(obs, identity=state.identity,
+                                    identity_score=state.identity_score))
+        return enriched, just_resolved
+
+    def _unresolved_reason(self, track_id: int) -> str:
+        state = self._face_state.get(track_id)
+        if state is None or not state.seen_face:
+            return "no_face_detected"
+        if state.max_width < self._min_face_px:
+            return "face_too_small"
+        if state.best_quality < 0.6:
+            return "poor_quality"
+        return "below_threshold"
+
+    # -- main loop -------------------------------------------------------------
+    def run(self, source) -> RunStats:
+        import time
+        import uuid
+        from dataclasses import replace
+
+        from vision_platform.types import MachineEvent
+
+        stats = RunStats()
+        for ts, frame in source:
+            stats.frames += 1
+            h, w = frame.shape[:2]
+            t0 = time.perf_counter()
+            detections = self.detector.detect(frame)
+            self._record("detect.persons", t0)
+            t0 = time.perf_counter()
+            observations = self._tracker.update(detections, ts=ts, frame_size=(w, h))
+            self._record("track.bytetrack", t0)
+            t0 = time.perf_counter()
+            observations, just_resolved = self._enrich(observations, frame)
+            self._record("face.encode+match", t0)
+
+            for obs in observations:
+                zones = self._zones.zones_of(obs)
+                for activity in self._activities:
+                    event = activity.update(obs, zones)
+                    if event is None:
+                        continue
+                    if event.identity is None and self._face_enabled:
+                        event = replace(event, data={
+                            **event.data,
+                            "unresolved_reason": self._unresolved_reason(obs.track_id)})
+                    if any(not g.passes(event) for g in self._gates):
+                        continue
+                    if self._debouncer is not None and not self._debouncer.allow(event):
+                        continue
+                    self.emitter.emit(event, self.machine_id, self.pipeline_label)
+                    stats.events += 1
+                    state = self._face_state.setdefault(obs.track_id, _TrackFace())
+                    if state.entry_event_id is None:
+                        state.entry_event_id = event.event_id
+                        state.entry_identity_was_none = event.identity is None
+                # Late identity resolution for a track whose entry already went
+                # out unresolved: emit a linked event so downstream can merge.
+                state = self._face_state.get(obs.track_id)
+                if (state is not None and obs.track_id in just_resolved
+                        and state.entry_event_id is not None
+                        and state.entry_identity_was_none and not state.resolved_emitted):
+                    data = {"entry_event_id": state.entry_event_id}
+                    owner = self._identity_owner.get(state.identity or "")
+                    if owner is not None and owner != obs.track_id:
+                        data["duplicate_identity"] = True
+                    else:
+                        self._identity_owner[state.identity or ""] = obs.track_id
+                    resolved = MachineEvent(
+                        event_id=str(uuid.uuid4()), type="identity_resolved", ts=obs.ts,
+                        camera_id=obs.camera_id, track_id=obs.track_id,
+                        identity=state.identity, identity_score=state.identity_score,
+                        data=data)
+                    self.emitter.emit(resolved, self.machine_id, self.pipeline_label)
+                    stats.events += 1
+                    state.resolved_emitted = True
+                elif state is not None and state.identity:
+                    self._identity_owner.setdefault(state.identity, obs.track_id)
+        return stats
+
+    def _record(self, node: str, t0: float) -> None:
+        if self.recorder is not None:
+            import time
+            self.recorder.record(node, (time.perf_counter() - t0) * 1000.0)
+
+
 def _check_backends(nodes: list[NodeSpec], runtime: dict[str, Any]) -> None:
     profile = runtime.get("profile", "dev-cpu")
     backend = PROFILE_BACKEND.get(profile)
