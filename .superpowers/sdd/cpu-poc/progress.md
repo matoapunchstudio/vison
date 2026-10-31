@@ -9,3 +9,4 @@ Task 5: complete (Labkom frame: 2 usable faces measured)
 Task 6: complete
 Task 6: Ruling: supervision 0.31 dropped ByteTrack — use trackers.ByteTrackTracker (same algorithm family, current home) — cost if wrong: tracker behavior differs slightly from old supervision defaults; pinned by track tests.
 Task 6: Ruling: YOLOX export expects BGR input empirically (28 vs 9 candidate rows) despite zoo demo RGB conversion; tiling (2,2) required for wide shots — cost if wrong: integration test on Labkom frame would catch regression.
+Task 7: complete

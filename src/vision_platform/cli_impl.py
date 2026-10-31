@@ -119,6 +119,30 @@ def cmd_enroll(args) -> int:
     return 0
 
 
+def cmd_bench(args) -> int:
+    from vision_platform.bench import LatencyRecorder, estimate_cameras_per_box
+
+    try:
+        spec = load_pipeline(Path(args.pipeline))
+        outbox = Outbox(Path("out/bench_outbox.db"))
+        emitter = FileEmitter(outbox, Path("out/bench_events.jsonl"))
+        recorder = LatencyRecorder()
+        runner = build_runner(spec, args, emitter, recorder=recorder)
+        with VideoFileSource(args.source,
+                             analytics_fps=float(spec.source.get("analytics_fps", 5))) as src:
+            stats = runner.run(_take(src, args.frames))
+    except (PipelineSpecError, FileNotFoundError, ValueError) as e:
+        return _err(str(e))
+    summary = recorder.summary()
+    estimate = estimate_cameras_per_box(
+        summary, analytics_fps=float(spec.source.get("analytics_fps", 5)),
+        face_cameras_fraction=args.face_cameras_fraction)
+    print(json.dumps({"label": "this PC, CPU", "frames": stats.frames,
+                      "events": stats.events, "nodes": summary,
+                      "estimate": estimate}, indent=2))
+    return 0
+
+
 def cmd_flush(args) -> int:
     emitter = WebhookEmitter(Outbox(Path(args.outbox)), args.webhook)
     print(json.dumps({"sent": emitter.flush(limit=100000)}))

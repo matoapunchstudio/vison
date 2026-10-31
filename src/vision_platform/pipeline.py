@@ -268,6 +268,13 @@ class PipelineRunner:
 
         if not self._face_enabled or not observations:
             return observations, set()
+        if all((s := self._face_state.get(o.track_id)) is not None and s.identity
+               for o in observations):
+            # Tiered face policy: identified tracks cost no further encoding.
+            from dataclasses import replace as _rep
+            return [_rep(o, identity=self._face_state[o.track_id].identity,
+                         identity_score=self._face_state[o.track_id].identity_score)
+                    for o in observations], set()
         hits = self.encoder.embed(frame)
         just_resolved: set[int] = set()
         enriched = []

@@ -20,7 +20,7 @@ zones:
 
 nodes:
   - {name: src,    type: source.file,    config: {}}
-  - {name: detect, type: detect.persons, config: {score_threshold: 0.4}}
+  - {name: detect, type: detect.persons, config: {score_threshold: 0.35, tile_grid: [2, 2]}}
   - {name: track,  type: track.bytetrack, config: {}}
   - {name: face,   type: face.encode,    config: {min_face_px: 40}}
   - {name: match,  type: face.match,     config: {match_threshold: 0.5}}
