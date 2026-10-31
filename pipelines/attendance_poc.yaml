@@ -1,0 +1,31 @@
+# Example composition #1 — classroom entry (single wide camera, Labkom-style layout).
+# Attendance semantics live only in this document (event type name, zones);
+# the core running it is use-case agnostic.
+name: attendance_poc
+version: 1
+camera_id: labkom_2
+
+source:
+  analytics_fps: 5        # frames analyzed per second; the rest are dropped
+
+runtime:
+  profile: dev-cpu        # dev-cpu | jetson-ort | jetson-deepstream
+  providers: [CPUExecutionProvider]
+
+# Normalized polygons over the 1920x1080 frame (draft from /tmp/labkom_zones_v2.png).
+zones:
+  door:    [[0.594, 0.03], [0.661, 0.03], [0.661, 0.21], [0.594, 0.21]]   # glass door, back
+  room:    [[0.09, 0.10], [0.81, 0.10], [0.81, 0.83], [0.09, 0.83]]       # seating interior
+  id_spot: [[0.30, 0.63], [0.48, 0.63], [0.48, 0.83], [0.30, 0.83]]       # front open tiles
+
+nodes:
+  - {name: src,    type: source.file,    config: {}}
+  - {name: detect, type: detect.persons, config: {score_threshold: 0.4}}
+  - {name: track,  type: track.bytetrack, config: {}}
+  - {name: face,   type: face.encode,    config: {min_face_px: 40}}
+  - {name: match,  type: face.match,     config: {match_threshold: 0.5}}
+  - name: entered
+    type: zone.sequence
+    config: {order: [door, room], within_s: 30, event_type: person_entered, anchor: foot}
+  - {name: deb, type: debounce, config: {cooldown_s: 300}}
+  - {name: out, type: emit.file, config: {}}

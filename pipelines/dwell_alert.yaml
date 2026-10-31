@@ -1,0 +1,26 @@
+# Example composition #2 — generic dwell/loitering alert. No face nodes.
+# Exists to prove the core is not an attendance program: identical runner,
+# different document, valid vision.event/1 payloads without identity fields.
+name: dwell_alert
+version: 1
+camera_id: gate_1
+
+source:
+  analytics_fps: 5
+
+runtime:
+  profile: dev-cpu
+  providers: [CPUExecutionProvider]
+
+zones:
+  watched: [[0.2, 0.2], [0.8, 0.2], [0.8, 0.9], [0.2, 0.9]]
+
+nodes:
+  - {name: src,    type: source.file,    config: {}}
+  - {name: detect, type: detect.persons, config: {score_threshold: 0.4}}
+  - {name: track,  type: track.bytetrack, config: {}}
+  - name: dwell
+    type: zone.dwell
+    config: {zone: watched, min_dwell_s: 60, event_type: loitering, anchor: foot}
+  - {name: deb, type: debounce, config: {cooldown_s: 600}}
+  - {name: out, type: emit.file, config: {}}

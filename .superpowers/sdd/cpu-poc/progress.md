@@ -2,3 +2,4 @@
 Pre-flight: T2 types/geometry consumed by T3/T6/T7 — signatures as in plan, no conflicts. T4 registry manifests consumed by T7 runner. T5 encoder/gallery consumed by T7. FaceHit defined in types.py (T2) though plan lists it under T5 interface — Ruling: define dataclass in types.py, encoder in face.py imports it; same fields.
 Task 1: complete - cli tests green after editable install fix (empty first wheel)
 Task 2: complete
+Task 3: complete
