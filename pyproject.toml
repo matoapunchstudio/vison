@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vision-platform"
+version = "0.1.0"
+description = "Machine-side composable computer-vision core: detect, track, recognize, emit event payloads."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=2.5.4",
+    "onnxruntime>=1.31.1",
+    "opencv-python-headless>=5.0.0.93",
+    "pyyaml>=6.0.3",
+    "supervision>=0.31.3",
+]
+
+[project.scripts]
+vpoc = "vision_platform.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vision_platform"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "model: requires downloaded model weights in models/ (skipped when absent)",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
