@@ -1,0 +1,23 @@
+{
+  "comment": "Golden backend-parity fixture: observations in -> events out. Track 1 enters door->hall->room and is identified; track 2 is born in room and must never emit.",
+  "zones": {
+    "door": [[0, 0], [0.2, 0], [0.2, 1], [0, 1]],
+    "hall": [[0.2, 0], [0.4, 0], [0.4, 1], [0.2, 1]],
+    "room": [[0.4, 0], [1, 0], [1, 1], [0.4, 1]]
+  },
+  "order": ["door", "hall", "room"],
+  "within_s": 30,
+  "event_type": "person_entered",
+  "observations": [
+    {"camera_id": "cam", "ts": 0.0, "track_id": 1, "bbox": [90, 860, 110, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": "alice", "identity_score": 0.81},
+    {"camera_id": "cam", "ts": 4.0, "track_id": 1, "bbox": [290, 860, 310, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": "alice", "identity_score": 0.81},
+    {"camera_id": "cam", "ts": 8.0, "track_id": 1, "bbox": [590, 860, 610, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": "alice", "identity_score": 0.81},
+    {"camera_id": "cam", "ts": 9.0, "track_id": 2, "bbox": [590, 860, 610, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": null, "identity_score": null},
+    {"camera_id": "cam", "ts": 12.0, "track_id": 2, "bbox": [90, 860, 110, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": null, "identity_score": null},
+    {"camera_id": "cam", "ts": 16.0, "track_id": 2, "bbox": [590, 860, 610, 900], "frame_size": [1000, 1000], "class_id": 0, "identity": null, "identity_score": null}
+  ],
+  "expected_events": [
+    {"type": "person_entered", "track_id": 1, "identity": "alice",
+     "data": {"from_zone": "door", "to_zone": "room", "via": ["hall"]}}
+  ]
+}
