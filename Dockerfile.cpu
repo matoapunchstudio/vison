@@ -1,0 +1,22 @@
+# CPU development/CI image for this x86_64 PC. Same application layers as
+# Dockerfile.jetson; only the base image and ONNX providers differ.
+FROM python:3.12-slim
+
+# libxcb/libx11/libgl: the `trackers` dependency pulls GUI opencv-python
+# alongside opencv-python-headless; its cv2 binary needs these at import time.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libglib2.0-0 libxcb1 libx11-6 libxext6 libxrender1 libgl1 curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+COPY pipelines ./pipelines
+COPY models/README.md ./models/README.md
+# Model weights are NOT baked in (models/*.onnx is docker-ignored):
+# mount a models directory at /app/models or fetch per models/README.md.
+RUN uv sync --locked --no-dev
+
+ENTRYPOINT ["/app/.venv/bin/vpoc"]
+CMD ["--help"]

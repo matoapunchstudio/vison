@@ -615,6 +615,25 @@ camera high in a front corner with wide-angle distortion, bright even lighting.
 - Golden synthetic fixtures (JSON tracks in → events out) remain required from day one —
   now as *backend parity* tests rather than language-port tests.
 
+### Update 2026-11-01 — CPU POC implemented (native execution)
+
+The POC plan was implemented in `vision-platform/` (see its README for the
+full guide). Verified on this PC: full pytest suite green including real-model
+integration on the Labkom frame; `vpoc run|enroll|flush|bench` operational;
+`Dockerfile.cpu` builds and executes a real pipeline run (a fresh-context
+review caught that the first image could only run `--help` — GUI OpenCV pulled
+in by the `trackers` dependency needed libxcb; fixed and re-verified). The
+same review's Critical/Important findings were fixed test-first: exclusive
+face→track assignment, reachable unresolved reasons via runner-side gating,
+node-config validation, per-activity zone anchors, pipeline-driven emitter
+selection with file preflight, and webhook backoff + file-flush recovery.
+Measured on the sample frame: YuNet+SFace yield 2 seated faces passing the
+identification gate; tiled (2×2) YOLOX in BGR input order is required for
+meaningful person recall on the wide shot; CPU latency ≈539 ms detect /
+79 ms face / 0.7 ms track per analyzed frame. Static-clip run correctly emits
+0 entries (all tracks born mid-room). Jetson, RTSP, DeepStream, and threshold
+calibration remain unproven — see README "Known limits".
+
 ## Open decisions (needed before the design doc)
 
 1. **Deployment shape:** single on-prem server for a handful of cameras, multi-site/cloud, or

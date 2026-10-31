@@ -30,16 +30,20 @@ class FaceEncoder(Protocol):
 
 
 class YuNetSFaceEncoder:
-    """YuNet detection + SFace 128-d embeddings (L2-normalized)."""
+    """YuNet detection + SFace 128-d embeddings (L2-normalized).
+
+    Returns every detected face (detector score >= 0.35) with its size and
+    score intact. Size/quality gating for *identification* is the runner's
+    job, so sub-gate faces still reach it and produce honest unresolved
+    reasons (face_too_small / poor_quality) instead of vanishing here."""
 
     model_id = SFACE_MODEL_ID
 
     def __init__(self, detector_path: str | Path, recognizer_path: str | Path,
-                 min_face_px: int = 40, score_threshold: float = 0.6):
+                 score_threshold: float = 0.35):
         for p in (detector_path, recognizer_path):
             if not Path(p).exists():
                 raise FileNotFoundError(f"face model file not found: {p}")
-        self.min_face_px = int(min_face_px)
         self._detector = cv2.FaceDetectorYN.create(
             str(detector_path), "", (320, 320), score_threshold)
         self._recognizer = cv2.FaceRecognizerSF.create(str(recognizer_path), "")
@@ -53,8 +57,6 @@ class YuNetSFaceEncoder:
             return hits
         for face in faces:
             x, y, fw, fh = (float(face[i]) for i in range(4))
-            if fw < self.min_face_px:
-                continue  # too small to identify reliably; skip early, save compute
             aligned = self._recognizer.alignCrop(frame_bgr, face)
             emb = self._recognizer.feature(aligned).ravel().astype(np.float32)
             norm = float(np.linalg.norm(emb))

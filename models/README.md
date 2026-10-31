@@ -29,7 +29,8 @@ sha256sum *.onnx   # compare with the table above
 
 ## Field note (Labkom 2 sample frame, 1920×1080)
 
-With YuNet score threshold 0.6 and `min_face_px=40`, only **2 faces** in the
-whole classroom frame produce usable embeddings. This measured result is the
-basis for the walk-in capture + look-up burst + `id_spot` identification
-strategy documented in the research report.
+Only **2 faces** in the whole classroom frame pass the runner's
+identification gate (width ≥ 40 px and detector quality ≥ 0.6). The encoder
+returns weaker detections too, but they only inform `unresolved_reason`.
+This measured result is the basis for the walk-in capture + look-up burst +
+`id_spot` identification strategy documented in the research report.

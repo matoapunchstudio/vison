@@ -132,6 +132,7 @@ def parse_pipeline(doc: dict[str, Any]) -> PipelineSpec:
     _check_acyclic(nodes)
     _check_ports(nodes, by_name)
     _check_zone_refs(nodes, zones)
+    _check_node_configs(nodes)
     emit = [n for n in nodes if n.type.startswith("emit.")]
     if len(emit) != 1:
         raise PipelineSpecError(
@@ -167,12 +168,41 @@ def _check_ports(nodes: list[NodeSpec], by_name: dict[str, NodeSpec]) -> None:
         want = REGISTRY[n.type].consumes
         if want == "None":
             continue
+        if not n.inputs:
+            raise PipelineSpecError(
+                f"port mismatch: node {n.name} ({n.type}) consumes {want} but has no inputs")
         for inp in n.inputs:
             got = REGISTRY[by_name[inp].type].produces
             if got != want:
                 raise PipelineSpecError(
                     f"port mismatch: node {n.name} ({n.type}) consumes {want} "
                     f"but input {inp} produces {got}")
+
+
+_REQUIRED_CONFIG = {
+    "zone.sequence": ("order", "within_s", "event_type"),
+    "zone.dwell": ("zone", "min_dwell_s", "event_type"),
+    "debounce": ("cooldown_s",),
+}
+
+
+def _check_node_configs(nodes: list[NodeSpec]) -> None:
+    types = {n.type for n in nodes}
+    if "face.match" in types and "face.encode" not in types:
+        raise PipelineSpecError("face.match requires a face.encode node upstream")
+    for n in nodes:
+        for key in _REQUIRED_CONFIG.get(n.type, ()):
+            if key not in n.config:
+                raise PipelineSpecError(
+                    f"node {n.name} ({n.type}) missing required config: {key}")
+        if n.type == "zone.sequence" and len(n.config.get("order") or []) < 2:
+            raise PipelineSpecError(
+                f"node {n.name} (zone.sequence) config order needs at least two zones")
+        if n.type == "condition.gate":
+            conds = n.config.get("conditions")
+            if not isinstance(conds, list) or not conds:
+                raise PipelineSpecError(
+                    f"node {n.name} (condition.gate) missing required config: conditions")
 
 
 def _check_zone_refs(nodes: list[NodeSpec], zones: dict[str, Polygon]) -> None:
@@ -195,7 +225,13 @@ def _check_zone_refs(nodes: list[NodeSpec], zones: dict[str, Polygon]) -> None:
 # node config and zone geometry, never here.
 # ---------------------------------------------------------------------------
 
-RUNNER_NODE_TYPES = frozenset(REGISTRY)
+# Node types this runner actually constructs/executes, listed explicitly so
+# the conformance test fails when a manifest is registered without wiring.
+RUNNER_NODE_TYPES = frozenset({
+    "source.file", "detect.persons", "track.bytetrack", "face.encode",
+    "face.match", "zone.sequence", "zone.dwell", "condition.gate",
+    "debounce", "emit.webhook", "emit.file",
+})
 
 
 @dataclass
@@ -237,24 +273,25 @@ class PipelineRunner:
 
         fps = float(spec.source.get("analytics_fps", 5))
         self._tracker = ByteTrackAdapter(camera_id=spec.camera_id, frame_rate=int(fps))
-        activity_nodes = spec.nodes_of_type("zone.sequence", "zone.dwell")
-        anchor = activity_nodes[0].config.get("anchor", "foot") if activity_nodes else "foot"
-        self._zones = ZoneSet(spec.zones, anchor=anchor)
-        self._activities = []
-        for n in activity_nodes:
+        # Each activity carries its own ZoneSet so per-node anchors are honored.
+        self._activities: list[tuple[Any, Any]] = []
+        for n in spec.nodes_of_type("zone.sequence", "zone.dwell"):
+            zones = ZoneSet(spec.zones, anchor=str(n.config.get("anchor", "foot")))
             if n.type == "zone.sequence":
-                self._activities.append(SequenceDetector(
+                act = SequenceDetector(
                     order=list(n.config["order"]), within_s=float(n.config["within_s"]),
-                    event_type=str(n.config["event_type"])))
+                    event_type=str(n.config["event_type"]))
             else:
-                self._activities.append(DwellDetector(
+                act = DwellDetector(
                     zone=str(n.config["zone"]), min_dwell_s=float(n.config["min_dwell_s"]),
-                    event_type=str(n.config["event_type"])))
+                    event_type=str(n.config["event_type"]))
+            self._activities.append((act, zones))
         self._gates = [Gate(list(n.config.get("conditions") or []))
                        for n in spec.nodes_of_type("condition.gate")]
-        deb = spec.nodes_of_type("debounce")
-        self._debouncer = Debouncer(float(deb[0].config["cooldown_s"])) if deb else None
+        self._debouncers = [Debouncer(float(n.config["cooldown_s"]))
+                            for n in spec.nodes_of_type("debounce")]
         self._face_enabled = encoder is not None and bool(spec.nodes_of_type("face.encode"))
+        self._match_enabled = bool(spec.nodes_of_type("face.match"))
         match = spec.nodes_of_type("face.match")
         self._match_threshold = float(match[0].config.get("match_threshold", 0.5)) if match else 0.5
         enc = spec.nodes_of_type("face.encode")
@@ -276,22 +313,39 @@ class PipelineRunner:
                          identity_score=self._face_state[o.track_id].identity_score)
                     for o in observations], set()
         hits = self.encoder.embed(frame)
+        # Exclusive assignment: each face belongs to at most one track — the
+        # smallest (most specific) bbox containing its center; strongest
+        # faces first. Without this, one face identifies every overlapping
+        # person in a crowd.
+        assignment: dict[int, Any] = {}
+        free = {o.track_id: o for o in observations}
+        for hit in sorted(hits, key=lambda h: -h.quality):
+            cx = (hit.bbox[0] + hit.bbox[2]) / 2
+            cy = (hit.bbox[1] + hit.bbox[3]) / 2
+            cands = [o for o in free.values()
+                     if o.bbox[0] <= cx <= o.bbox[2] and o.bbox[1] <= cy <= o.bbox[3]]
+            if not cands:
+                continue
+            owner = min(cands, key=lambda o: (o.bbox[2] - o.bbox[0]) * (o.bbox[3] - o.bbox[1]))
+            assignment[owner.track_id] = hit
+            del free[owner.track_id]
         just_resolved: set[int] = set()
         enriched = []
         for obs in observations:
             state = self._face_state.setdefault(obs.track_id, _TrackFace())
-            x1, y1, x2, y2 = obs.bbox
-            inside = [h for h in hits
-                      if x1 <= (h.bbox[0] + h.bbox[2]) / 2 <= x2
-                      and y1 <= (h.bbox[1] + h.bbox[3]) / 2 <= y2]
-            if inside:
-                best = max(inside, key=lambda h: h.quality)
+            best = assignment.get(obs.track_id)
+            if best is not None:
+                width = best.bbox[2] - best.bbox[0]
                 state.seen_face = True
-                state.max_width = max(state.max_width, best.bbox[2] - best.bbox[0])
+                state.max_width = max(state.max_width, width)
                 if best.quality > state.best_quality:
                     state.best_quality = best.quality
                     state.best_embedding = best.embedding
-                    if self.gallery is not None and state.identity is None:
+                    # Size/quality gate: small or poor faces inform the
+                    # unresolved reason but must never produce an identity.
+                    if (self._match_enabled and self.gallery is not None
+                            and state.identity is None
+                            and width >= self._min_face_px and best.quality >= 0.6):
                         hit = self.gallery.identify_with_model(
                             best.embedding, self.encoder.model_id, self._match_threshold)
                         if hit is not None:
@@ -334,9 +388,8 @@ class PipelineRunner:
             self._record("face.encode+match", t0)
 
             for obs in observations:
-                zones = self._zones.zones_of(obs)
-                for activity in self._activities:
-                    event = activity.update(obs, zones)
+                for activity, zone_set in self._activities:
+                    event = activity.update(obs, zone_set.zones_of(obs))
                     if event is None:
                         continue
                     if event.identity is None and self._face_enabled:
@@ -345,7 +398,7 @@ class PipelineRunner:
                             "unresolved_reason": self._unresolved_reason(obs.track_id)})
                     if any(not g.passes(event) for g in self._gates):
                         continue
-                    if self._debouncer is not None and not self._debouncer.allow(event):
+                    if any(not d.allow(event) for d in self._debouncers):
                         continue
                     self.emitter.emit(event, self.machine_id, self.pipeline_label)
                     stats.events += 1

@@ -10,3 +10,8 @@ Task 6: complete
 Task 6: Ruling: supervision 0.31 dropped ByteTrack — use trackers.ByteTrackTracker (same algorithm family, current home) — cost if wrong: tracker behavior differs slightly from old supervision defaults; pinned by track tests.
 Task 6: Ruling: YOLOX export expects BGR input empirically (28 vs 9 candidate rows) despite zoo demo RGB conversion; tiling (2,2) required for wide shots — cost if wrong: integration test on Labkom frame would catch regression.
 Task 7: complete
+Task 8: complete (bench on Labkom still clip: detect tiled 539ms, face 79ms, track 0.7ms per frame CPU)
+Task 9: implementation done, pending final review
+Final review: fresh subagent reviewed whole implementation; suite re-run by reviewer 55/55. C1+I1-I5 fixed test-first (7 new regression tests RED->GREEN, suite 62/62, Docker real run verified).
+Final: minor (deferred): payload pipeline version hardcoded @1; example zones door-room overlap can emit on first frame; late resolution requires strictly increasing detector score; profile/providers cross-check and face tensorrt manifest honesty; small CLI/gallery footguns (flush creates DB on typo path, --max-frames 0, non-atomic gallery save, corrupt-gallery exception class); unbounded per-track state on very long runs; bench entry-burst scenario not modeled (documented in estimator assumptions).
+Git note: per-task local commits were created during native plan execution up to Task 8; Task 9 + review fix pass left uncommitted for user review. No push.

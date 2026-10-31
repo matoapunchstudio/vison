@@ -50,11 +50,9 @@ def build_runner(spec, args, emitter, recorder=None):
                          "refusing silent CPU fallback")
     encoder = gallery = None
     if spec.nodes_of_type("face.encode"):
-        enc_cfg = spec.nodes_of_type("face.encode")[0].config
         encoder = YuNetSFaceEncoder(
             getattr(args, "face_detector_model", None) or DEFAULT_FACE_DET,
-            getattr(args, "face_recognizer_model", None) or DEFAULT_FACE_REC,
-            min_face_px=int(enc_cfg.get("min_face_px", 40)))
+            getattr(args, "face_recognizer_model", None) or DEFAULT_FACE_REC)
         gallery_path = getattr(args, "gallery", None)
         if gallery_path:
             gallery = Gallery.load(Path(gallery_path))
@@ -68,18 +66,46 @@ def build_runner(spec, args, emitter, recorder=None):
                           recorder=recorder)
 
 
+def _preflight_files(spec, args) -> None:
+    """Check every referenced file exists BEFORE the outbox is created."""
+    wanted = [Path(args.source)]
+    if spec.nodes_of_type("detect.persons"):
+        wanted.append(Path(getattr(args, "detector_model", None) or DEFAULT_DETECTOR))
+    if spec.nodes_of_type("face.encode"):
+        wanted.append(Path(getattr(args, "face_detector_model", None) or DEFAULT_FACE_DET))
+        wanted.append(Path(getattr(args, "face_recognizer_model", None) or DEFAULT_FACE_REC))
+    if getattr(args, "gallery", None):
+        wanted.append(Path(args.gallery))
+    for p in wanted:
+        if not p.exists():
+            raise FileNotFoundError(f"required file not found: {p}")
+
+
+def _emitter_for(spec, args, outbox):
+    """Delivery target is decided by the pipeline's emit node, not silently by flags."""
+    emit_type = spec.nodes_of_type("emit.webhook", "emit.file")[0].type
+    if emit_type == "emit.webhook":
+        if not args.webhook:
+            raise ValueError("pipeline declares emit.webhook but --webhook URL was not given")
+        return WebhookEmitter(outbox, args.webhook)
+    if args.webhook:
+        raise ValueError("pipeline declares emit.file but --webhook was given; "
+                         "fix the pipeline document or drop --webhook")
+    return FileEmitter(outbox, Path(args.events_file or "out/events.jsonl"))
+
+
 def cmd_run(args) -> int:
     try:
         spec = load_pipeline(Path(args.pipeline))
+        _preflight_files(spec, args)
         outbox = Outbox(Path(args.outbox))
-        emitter = (WebhookEmitter(outbox, args.webhook) if args.webhook
-                   else FileEmitter(outbox, Path(args.events_file or "out/events.jsonl")))
+        emitter = _emitter_for(spec, args, outbox)
         runner = build_runner(spec, args, emitter)
         with VideoFileSource(args.source,
                              analytics_fps=float(spec.source.get("analytics_fps", 5))) as src:
             frames = src if not args.max_frames else _take(src, args.max_frames)
             stats = runner.run(frames)
-    except (PipelineSpecError, FileNotFoundError, ValueError) as e:
+    except (PipelineSpecError, FileNotFoundError, ValueError, KeyError) as e:
         return _err(str(e))
     print(json.dumps({"frames": stats.frames, "events": stats.events}))
     return 0
@@ -95,8 +121,7 @@ def _take(source, n):
 def cmd_enroll(args) -> int:
     gallery_path = Path(args.gallery)
     try:
-        encoder = YuNetSFaceEncoder(args.face_detector_model, args.face_recognizer_model,
-                                    min_face_px=1)
+        encoder = YuNetSFaceEncoder(args.face_detector_model, args.face_recognizer_model)
         gallery = Gallery.load(gallery_path) if gallery_path.exists() \
             else Gallery(model_id=encoder.model_id)
         if gallery.model_id != encoder.model_id:
@@ -144,6 +169,12 @@ def cmd_bench(args) -> int:
 
 
 def cmd_flush(args) -> int:
-    emitter = WebhookEmitter(Outbox(Path(args.outbox)), args.webhook)
-    print(json.dumps({"sent": emitter.flush(limit=100000)}))
+    if bool(args.webhook) == bool(args.events_file):
+        return _err("give exactly one of --webhook or --events-file")
+    outbox = Outbox(Path(args.outbox))
+    if args.webhook:
+        sent = WebhookEmitter(outbox, args.webhook).flush(limit=100000, force=True)
+    else:
+        sent = FileEmitter(outbox, Path(args.events_file)).flush()
+    print(json.dumps({"sent": sent}))
     return 0

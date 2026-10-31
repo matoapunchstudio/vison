@@ -39,7 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_flush = sub.add_parser("flush", help="re-send pending outbox payloads")
     p_flush.add_argument("--outbox", required=True)
-    p_flush.add_argument("--webhook", required=True)
+    p_flush.add_argument("--webhook", help="flush pending payloads to this webhook URL")
+    p_flush.add_argument("--events-file", help="flush pending payloads to this JSONL file")
 
     p_bench = sub.add_parser("bench", help="measure per-node latency")
     p_bench.add_argument("--pipeline", required=True)

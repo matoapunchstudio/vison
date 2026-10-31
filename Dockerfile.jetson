@@ -1,0 +1,26 @@
+# Jetson site image — SKELETON, not yet a verified accelerator build.
+#
+# TODO(site): once the exact Jetson model + JetPack version are confirmed,
+# replace the base image below with the matching NVIDIA L4T/JetPack image
+# (nvcr.io/nvidia/l4t-*), and install the JetPack-matched onnxruntime-gpu
+# wheel from NVIDIA (PyPI onnxruntime is CPU-only on aarch64 Jetson).
+# Then set the pipeline runtime profile to jetson-ort with providers:
+#   providers: [TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider]
+# The runner refuses to start if the first requested provider is not active,
+# so a broken GPU install fails loudly instead of silently running on CPU.
+FROM --platform=linux/arm64 python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libglib2.0-0 libxcb1 libx11-6 libxext6 libxrender1 libgl1 curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+COPY pipelines ./pipelines
+COPY models/README.md ./models/README.md
+RUN uv sync --locked --no-dev
+
+ENTRYPOINT ["/app/.venv/bin/vpoc"]
+CMD ["--help"]

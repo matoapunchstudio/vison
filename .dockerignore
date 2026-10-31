@@ -1,0 +1,7 @@
+.git
+.venv
+out
+.pytest_cache
+__pycache__
+models/*.onnx
+.superpowers

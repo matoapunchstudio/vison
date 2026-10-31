@@ -55,6 +55,30 @@ def test_webhook_flush_failure_keeps_pending_then_sends_same_id(tmp_path):
     assert sent[0]["event_id"] == "e-1"
 
 
+def test_webhook_failure_enters_cooldown_not_retry_storm(tmp_path):
+    box = Outbox(tmp_path / "o.db")
+    calls = []
+
+    def fail_post(url, payload, timeout):
+        calls.append(payload["event_id"])
+        return 500
+
+    em = WebhookEmitter(box, "http://downstream/hook", post=fail_post)
+    em.emit(ev("e-1"), "m", "p@1")
+    em.emit(ev("e-2"), "m", "p@1")  # must not hammer a down receiver per event
+    assert len(calls) == 1
+    assert len(box.pending(10)) == 2
+
+
+def test_file_emitter_flush_recovers_pending_after_crash_gap(tmp_path):
+    box = Outbox(tmp_path / "o.db")
+    box.put(ev(), "m", "p@1")  # persisted, then "crash" before file append
+    out = tmp_path / "events.jsonl"
+    assert FileEmitter(box, out).flush() == 1
+    assert json.loads(out.read_text().strip())["event_id"] == "e-1"
+    assert box.pending(10) == []
+
+
 def test_file_emitter_writes_identical_payload(tmp_path):
     box = Outbox(tmp_path / "o.db")
     out = tmp_path / "events.jsonl"

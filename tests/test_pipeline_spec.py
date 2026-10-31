@@ -94,6 +94,28 @@ def test_missing_emit_node_rejected(tmp_path):
         load_pipeline(_write(tmp_path, doc))
 
 
+def test_empty_sequence_config_rejected_at_validation(tmp_path):
+    doc = json_clone(BASE)
+    doc["nodes"][3]["config"] = {}
+    with pytest.raises(PipelineSpecError, match="order"):
+        load_pipeline(_write(tmp_path, doc))
+
+
+def test_first_node_cannot_consume_frame(tmp_path):
+    doc = json_clone(BASE)
+    doc["nodes"] = doc["nodes"][1:]  # starts at detect.persons, no Frame producer
+    with pytest.raises(PipelineSpecError, match="port"):
+        load_pipeline(_write(tmp_path, doc))
+
+
+def test_face_match_without_encode_rejected(tmp_path):
+    doc = json_clone(BASE)
+    doc["nodes"].insert(3, {"name": "match", "type": "face.match",
+                            "config": {"match_threshold": 0.5}})
+    with pytest.raises(PipelineSpecError, match="face.encode"):
+        load_pipeline(_write(tmp_path, doc))
+
+
 def test_registry_manifests_have_known_port_kinds():
     kinds = {"None", "Frame", "Detections", "Observations", "Events"}
     for m in REGISTRY.values():

@@ -56,6 +56,8 @@ def run_pipeline(tmp_path, face_mode, gallery=None):
     dets = [[person_at(x)] for x in xs]
     if face_mode == "alice":
         faces = [[face_inside(x)] for x in xs]
+    elif face_mode == "small":
+        faces = [[face_inside(x, width=20.0)] for x in xs]
     elif face_mode == "none":
         faces = [[] for _ in xs]
     elif face_mode == "late":  # face only becomes visible well after entry
@@ -100,6 +102,36 @@ def test_late_identity_resolution_links_to_entry(tmp_path):
     assert types == ["person_entered", "identity_resolved"]
     assert payloads[1]["identity"] == "alice"
     assert payloads[1]["data"]["entry_event_id"] == payloads[0]["event_id"]
+
+
+def test_small_face_reports_face_too_small_not_identity(tmp_path):
+    stats, payloads = run_pipeline(tmp_path, "small", gallery_with_alice())
+    assert len(payloads) == 1
+    assert payloads[0]["identity"] is None
+    assert payloads[0]["data"]["unresolved_reason"] == "face_too_small"
+
+
+def test_one_face_never_identifies_two_overlapping_tracks(tmp_path):
+    # Unit-level at the enrichment boundary (ByteTrack itself cannot hold two
+    # near-identical overlapping synthetic boxes apart — verified by probe —
+    # so exclusivity is asserted where face->track assignment actually lives).
+    from vision_platform.types import TrackObservation
+
+    out = tmp_path / "events.jsonl"
+    runner = PipelineRunner(spec(), detector=FakeDetector([]),
+                            encoder=FakeEncoder([[face_inside(0.32)]], model_id="fake/1"),
+                            gallery=gallery_with_alice(),
+                            emitter=FileEmitter(Outbox(tmp_path / "o.db"), out),
+                            machine_id="test-box")
+    obs = [
+        TrackObservation(camera_id="cam", ts=0.0, track_id=1,
+                         bbox=(270, 740, 330, 900), frame_size=(1000, 1000), class_id=0),
+        TrackObservation(camera_id="cam", ts=0.0, track_id=2,
+                         bbox=(310, 740, 370, 900), frame_size=(1000, 1000), class_id=0),
+    ]
+    enriched, _ = runner._enrich(obs, FRAME)  # one face whose center is inside both
+    assert sum(o.identity == "alice" for o in enriched) == 1
+    assert sum(o.identity is None for o in enriched) == 1
 
 
 def test_dwell_example_pipeline_runs_without_face_nodes(tmp_path):
