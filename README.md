@@ -141,9 +141,18 @@ Registered nodes in the POC:
 
 Sequence semantics worth knowing: a track is eligible for a sequence only
 if its **first** observation lies in the first zone (born at the door), so
-occlusion-split tracks born mid-room never count as entries. Zone anchors:
-`foot` (bottom-center, for walking people) or `center` (for seated/occluded
-tracks whose feet are hidden).
+occlusion-split tracks born mid-room never count as entries. A sequence
+advances at most one zone per observation, and zone polygons in one
+sequence should not overlap. Zone anchors: `foot` (bottom-center, for
+walking people) or `center` (for seated/occluded tracks whose feet are
+hidden) — each activity node takes its own anchor.
+
+Manifest `backends` means "runnable under that runtime profile", not
+"accelerated by it": under `jetson-ort`, detection uses TensorRT/CUDA
+providers while YuNet+SFace still run in OpenCV on CPU until a TensorRT
+face-encoder node exists. The validator also cross-checks that the first
+declared provider matches the profile, and the runner refuses a silently
+CPU-fallen-back GPU provider at startup.
 
 ### Adding a capability
 
@@ -201,9 +210,11 @@ code never executes on the machine.
   `Dockerfile.jetson` is a skeleton with TODOs, not a verified build.
 - RTSP/multi-camera operation is unexercised; sources are video files here.
 - Thresholds are uncalibrated; no accuracy claim is made for any camera.
-- Track ID switches can still split one person into an unresolved entry
-  plus a later resolution; identity-keyed debounce and `identity_resolved`
-  linking mitigate, and unknown-track duplicates remain a documented limit.
+- Track ID switches mid-sequence usually produce a **missed** entry (the new
+  track is born mid-room and is ineligible), not a duplicate; where the same
+  identity does complete twice, identity-keyed debounce suppresses the
+  repeat. Attendance counts from this core should be reconciled downstream
+  (the counted-vs-attended teacher SOP) rather than trusted blindly.
 - Face alignment/encoding in a future DeepStream backend needs a hybrid
   probe or custom preprocess library (see research report).
 - Biometric data of minors is highly regulated (GDPR special category,

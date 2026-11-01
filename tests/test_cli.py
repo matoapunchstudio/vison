@@ -16,6 +16,21 @@ def test_unknown_subcommand_exits_two():
     assert exc.value.code == 2
 
 
+def test_flush_missing_outbox_errors_without_creating_db(tmp_path):
+    db = tmp_path / "missing.db"
+    rc = main(["flush", "--outbox", str(db), "--webhook", "http://x.invalid/h"])
+    assert rc == 2
+    assert not db.exists()
+
+
+def test_run_rejects_nonpositive_max_frames(tmp_path):
+    rc = main(["run", "--pipeline", "pipelines/attendance_poc.yaml",
+               "--source", "whatever.mp4", "--max-frames", "0",
+               "--outbox", str(tmp_path / "o.db")])
+    assert rc == 2
+    assert not (tmp_path / "o.db").exists()
+
+
 def test_known_subcommands_are_registered(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])

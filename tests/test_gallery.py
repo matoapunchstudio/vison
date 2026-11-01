@@ -50,6 +50,21 @@ def test_model_id_mismatch_raises_on_identify():
         g.identify_with_model(vec(1.0), model_id="other/9", threshold=0.5)
 
 
+def test_save_load_exact_path_without_suffix(tmp_path):
+    g = make_gallery()
+    p = tmp_path / "gallery"  # no .npz suffix: save must write exactly here
+    g.save(p)
+    assert p.exists()
+    assert Gallery.load(p).identify(vec(1.0), 0.5)[0] == "alice"
+
+
+def test_corrupt_gallery_raises_value_error(tmp_path):
+    p = tmp_path / "g.npz"
+    p.write_bytes(b"not a zip at all")
+    with pytest.raises(ValueError, match="gallery"):
+        Gallery.load(p)
+
+
 def test_enroll_rejects_zero_vector():
     with pytest.raises(ValueError):
         Gallery(model_id="m").enroll("x", np.zeros(128, dtype=np.float32))

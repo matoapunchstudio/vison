@@ -93,6 +93,25 @@ def test_gate_conditions_all_semantics():
     assert gate.passes(obs(identity="alice")) is False
 
 
+def test_sequence_advances_at_most_one_step_per_observation():
+    # Overlapping zones: a track first seen inside both door and room must not
+    # complete the sequence on its very first observation.
+    both = frozenset({"door", "room"})
+    det = SequenceDetector(order=["door", "room"], within_s=30, event_type="person_entered")
+    assert det.update(obs(ts=0), both) is None
+    assert det.update(obs(ts=1), both) is not None
+
+
+def test_dwell_state_pruned_for_long_gone_tracks():
+    det = DwellDetector(zone="room", min_dwell_s=60, event_type="loitering")
+    o1 = obs(track=1, x=0.6, ts=0.0)
+    det.update(o1, ZS.zones_of(o1))
+    assert len(det._state) == 1
+    o2 = obs(track=2, x=0.6, ts=10000.0)
+    det.update(o2, ZS.zones_of(o2))
+    assert 1 not in det._state  # pruned, unbounded growth avoided
+
+
 def test_golden_fixture_entry_sequence():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "entry_sequence.json").read_text())
     zs = ZoneSet({k: [tuple(p) for p in v] for k, v in fixture["zones"].items()})

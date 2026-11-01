@@ -15,7 +15,9 @@ runtime:
 # Normalized polygons over the 1920x1080 frame (draft from /tmp/labkom_zones_v2.png).
 zones:
   door:    [[0.594, 0.03], [0.661, 0.03], [0.661, 0.21], [0.594, 0.21]]   # glass door, back
-  room:    [[0.09, 0.10], [0.81, 0.10], [0.81, 0.83], [0.09, 0.83]]       # seating interior
+  # room starts below the door's bottom edge: zones must not overlap, or a
+  # track first seen in the overlap would satisfy the sequence instantly.
+  room:    [[0.09, 0.21], [0.81, 0.21], [0.81, 0.83], [0.09, 0.83]]       # seating interior
   id_spot: [[0.30, 0.63], [0.48, 0.63], [0.48, 0.83], [0.30, 0.83]]       # front open tiles
 
 nodes:

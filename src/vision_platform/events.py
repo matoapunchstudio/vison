@@ -85,12 +85,14 @@ class SequenceDetector:
                 return None
             prog = _Progress(step=1, started_ts=obs.ts, last_seen_ts=obs.ts)
             self._progress[tid] = prog
+            return None  # birth observation counts as step one; advance next time
         prog.last_seen_ts = obs.ts
         if obs.ts - prog.started_ts > self.within_s:
             del self._progress[tid]
             return None
-        # Advance through any expected zones present now (handles overlapping zones).
-        while prog.step < len(self.order) and self.order[prog.step] in zones:
+        # Advance at most one step per observation: with overlapping zones a
+        # track first seen in an overlap must not complete on frame one.
+        if prog.step < len(self.order) and self.order[prog.step] in zones:
             prog.step += 1
         if prog.step >= len(self.order):
             del self._progress[tid]
@@ -111,6 +113,7 @@ class SequenceDetector:
 @dataclass
 class _DwellState:
     since_ts: float
+    last_seen_ts: float = 0.0
     emitted: bool = False
 
 
@@ -124,11 +127,15 @@ class DwellDetector:
         self._state: dict[int, _DwellState] = {}
 
     def update(self, obs: TrackObservation, zones: frozenset[str]) -> MachineEvent | None:
+        horizon = max(3600.0, self.min_dwell_s * 4)
+        self._state = {k: v for k, v in self._state.items()
+                       if obs.ts - v.last_seen_ts <= horizon}
         tid = obs.track_id
         if self.zone not in zones:
             self._state.pop(tid, None)
             return None
-        state = self._state.setdefault(tid, _DwellState(since_ts=obs.ts))
+        state = self._state.setdefault(tid, _DwellState(since_ts=obs.ts, last_seen_ts=obs.ts))
+        state.last_seen_ts = obs.ts
         if not state.emitted and obs.ts - state.since_ts >= self.min_dwell_s:
             state.emitted = True
             return _event(obs, self.event_type,
@@ -144,6 +151,8 @@ class Debouncer:
         self._last: dict[tuple[str, str], float] = {}
 
     def allow(self, event: MachineEvent) -> bool:
+        self._last = {k: v for k, v in self._last.items()
+                      if event.ts - v < self.cooldown_s}
         key = (event.identity or f"track:{event.track_id}", event.type)
         last = self._last.get(key)
         if last is not None and event.ts - last < self.cooldown_s:

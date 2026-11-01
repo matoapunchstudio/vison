@@ -46,8 +46,12 @@ def estimate_cameras_per_box(summary: dict[str, dict[str, Any]], analytics_fps: 
     per_frame_ms += face_cameras_fraction * summary.get(FACE_NODE, {"mean_ms": 0.0})["mean_ms"]
     per_camera_per_s = per_frame_ms * analytics_fps
     cameras = int(1000.0 * accelerator_speedup // per_camera_per_s) if per_camera_per_s > 0 else 0
+    burst_per_frame = sum(s["mean_ms"] for s in summary.values())
+    burst_per_s = burst_per_frame * analytics_fps
+    burst = int(1000.0 * accelerator_speedup // burst_per_s) if burst_per_s > 0 else 0
     return {
         "cameras": cameras,
+        "entry_burst_cameras": burst,
         "bottleneck_node": bottleneck,
         "per_camera_ms_per_frame": per_frame_ms,
         "assumptions": [
@@ -56,7 +60,8 @@ def estimate_cameras_per_box(summary: dict[str, dict[str, Any]], analytics_fps: 
             f"analytics_fps={analytics_fps} for every camera, continuously",
             f"face cost weighted by face_cameras_fraction={face_cameras_fraction}",
             "single sequential worker; decode, disk, network and OS overhead excluded",
-            "steady state only — synchronized entry bursts (all classrooms at once) "
-            "are not modeled and will need headroom on top of this number",
+            "entry burst scenario: entry_burst_cameras assumes every camera pays full "
+            "face cost simultaneously (synchronized class start); size for the burst "
+            "number, not the steady-state one, when starts are synchronized",
         ],
     }

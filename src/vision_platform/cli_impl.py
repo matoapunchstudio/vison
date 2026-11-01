@@ -87,6 +87,9 @@ def _emitter_for(spec, args, outbox):
     if emit_type == "emit.webhook":
         if not args.webhook:
             raise ValueError("pipeline declares emit.webhook but --webhook URL was not given")
+        if args.events_file:
+            raise ValueError("pipeline declares emit.webhook but --events-file was given; "
+                             "fix the pipeline document or drop --events-file")
         return WebhookEmitter(outbox, args.webhook)
     if args.webhook:
         raise ValueError("pipeline declares emit.file but --webhook was given; "
@@ -95,6 +98,8 @@ def _emitter_for(spec, args, outbox):
 
 
 def cmd_run(args) -> int:
+    if args.max_frames is not None and args.max_frames <= 0:
+        return _err("--max-frames must be a positive integer")
     try:
         spec = load_pipeline(Path(args.pipeline))
         _preflight_files(spec, args)
@@ -135,7 +140,13 @@ def cmd_enroll(args) -> int:
             hits = encoder.embed(img)
             if len(hits) != 1:
                 return _err(f"photo {photo}: expected exactly 1 face, found {len(hits)}")
-            gallery.enroll(args.identity, hits[0].embedding)
+            hit = hits[0]
+            width = hit.bbox[2] - hit.bbox[0]
+            if width < 40 or hit.quality < 0.6:
+                return _err(f"photo {photo}: face too small/poor for enrollment "
+                            f"(width={width:.0f}px, quality={hit.quality:.2f}); "
+                            "use a closer, frontal photo")
+            gallery.enroll(args.identity, hit.embedding)
     except (FileNotFoundError, ValueError) as e:
         return _err(str(e))
     gallery.save(gallery_path)
@@ -171,6 +182,8 @@ def cmd_bench(args) -> int:
 def cmd_flush(args) -> int:
     if bool(args.webhook) == bool(args.events_file):
         return _err("give exactly one of --webhook or --events-file")
+    if not Path(args.outbox).exists():
+        return _err(f"outbox not found: {args.outbox} (nothing to flush; check the path)")
     outbox = Outbox(Path(args.outbox))
     if args.webhook:
         sent = WebhookEmitter(outbox, args.webhook).flush(limit=100000, force=True)

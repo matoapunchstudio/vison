@@ -134,6 +134,32 @@ def test_one_face_never_identifies_two_overlapping_tracks(tmp_path):
     assert sum(o.identity is None for o in enriched) == 1
 
 
+def test_lower_quality_matching_face_still_resolves(tmp_path):
+    # First seen face: excellent detector score, not Alice. A later, slightly
+    # lower-score Alice face must still be tried (detector score is not a
+    # proxy for matchability).
+    from vision_platform.types import TrackObservation
+
+    def hit(seed, quality):
+        emb = np.zeros(128, dtype=np.float32)
+        emb[seed] = 1.0
+        return FaceHit(bbox=(295, 750, 345, 800), embedding=emb, quality=quality)
+
+    out = tmp_path / "events.jsonl"
+    runner = PipelineRunner(spec(), detector=FakeDetector([]),
+                            encoder=FakeEncoder([[hit(1, 0.99)], [hit(0, 0.80)]],
+                                                model_id="fake/1"),
+                            gallery=gallery_with_alice(),
+                            emitter=FileEmitter(Outbox(tmp_path / "o.db"), out),
+                            machine_id="test-box")
+    obs = [TrackObservation(camera_id="cam", ts=0.0, track_id=1,
+                            bbox=(270, 740, 330, 900), frame_size=(1000, 1000), class_id=0)]
+    e1, _ = runner._enrich(obs, FRAME)
+    assert e1[0].identity is None
+    e2, _ = runner._enrich(obs, FRAME)
+    assert e2[0].identity == "alice"
+
+
 def test_dwell_example_pipeline_runs_without_face_nodes(tmp_path):
     spec2 = load_pipeline(ROOT / "pipelines" / "dwell_alert.yaml")
     frames = [(float(t), FRAME) for t in range(0, 130, 10)]

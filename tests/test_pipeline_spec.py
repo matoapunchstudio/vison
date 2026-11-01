@@ -116,6 +116,19 @@ def test_face_match_without_encode_rejected(tmp_path):
         load_pipeline(_write(tmp_path, doc))
 
 
+def test_pipeline_version_is_carried(tmp_path):
+    doc = json_clone(BASE)
+    doc["version"] = 7
+    assert load_pipeline(_write(tmp_path, doc)).version == 7
+
+
+def test_profile_provider_mismatch_rejected(tmp_path):
+    doc = json_clone(BASE)
+    doc["runtime"] = {"profile": "jetson-ort", "providers": ["CPUExecutionProvider"]}
+    with pytest.raises(PipelineSpecError, match="provider"):
+        load_pipeline(_write(tmp_path, doc))
+
+
 def test_registry_manifests_have_known_port_kinds():
     kinds = {"None", "Frame", "Detections", "Observations", "Events"}
     for m in REGISTRY.values():

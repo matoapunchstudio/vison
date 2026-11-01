@@ -62,6 +62,9 @@ class Gallery:
         return self.identify(embedding, threshold)
 
     def save(self, path: Path) -> None:
+        """Atomically write to exactly `path` (np.savez on a path would append .npz)."""
+        import os
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         names = list(self.templates)
@@ -69,16 +72,22 @@ class Gallery:
                else np.zeros((0, 0), dtype=np.float32))
         meta = json.dumps({"model_id": self.model_id, "names": names,
                            "counts": [self._counts[n] for n in names]})
-        np.savez(path, templates=mat, meta=np.array(meta))
+        tmp = path.with_name(path.name + ".tmp")
+        with tmp.open("wb") as fh:
+            np.savez(fh, templates=mat, meta=np.array(meta))
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: Path) -> "Gallery":
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"gallery file not found: {path}")
-        with np.load(path) as data:
-            meta = json.loads(str(data["meta"]))
-            mat = data["templates"]
+        try:
+            with np.load(path) as data:
+                meta = json.loads(str(data["meta"]))
+                mat = np.array(data["templates"])
+        except Exception as e:
+            raise ValueError(f"cannot load gallery {path}: {e}") from e
         g = cls(model_id=meta["model_id"])
         for name, count, row in zip(meta["names"], meta["counts"], mat):
             g.templates[name] = _normalize(row)

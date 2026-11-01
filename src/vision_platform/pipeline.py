@@ -77,6 +77,7 @@ class PipelineSpec:
     runtime: dict[str, Any]
     nodes: list[NodeSpec]
     zones: dict[str, Polygon]
+    version: int = 1
 
     def node(self, name: str) -> NodeSpec:
         for n in self.nodes:
@@ -141,7 +142,7 @@ def parse_pipeline(doc: dict[str, Any]) -> PipelineSpec:
     _check_backends(nodes, runtime)
     return PipelineSpec(name=str(doc["name"]), camera_id=str(doc["camera_id"]),
                         source=dict(doc.get("source") or {}), runtime=runtime,
-                        nodes=nodes, zones=zones)
+                        nodes=nodes, zones=zones, version=int(doc.get("version", 1)))
 
 
 def _check_acyclic(nodes: list[NodeSpec]) -> None:
@@ -245,6 +246,7 @@ class _TrackFace:
     best_embedding: Any = None
     best_quality: float = -1.0
     max_width: float = 0.0
+    last_seen_ts: float = 0.0
     seen_face: bool = False
     identity: str | None = None
     identity_score: float | None = None
@@ -269,7 +271,7 @@ class PipelineRunner:
         self.emitter = emitter
         self.machine_id = machine_id
         self.recorder = recorder
-        self.pipeline_label = f"{spec.name}@1"
+        self.pipeline_label = f"{spec.name}@{spec.version}"
 
         fps = float(spec.source.get("analytics_fps", 5))
         self._tracker = ByteTrackAdapter(camera_id=spec.camera_id, frame_rate=int(fps))
@@ -305,6 +307,9 @@ class PipelineRunner:
 
         if not self._face_enabled or not observations:
             return observations, set()
+        now = max(o.ts for o in observations)
+        self._face_state = {k: v for k, v in self._face_state.items()
+                            if now - v.last_seen_ts <= 3600.0}
         if all((s := self._face_state.get(o.track_id)) is not None and s.identity
                for o in observations):
             # Tiered face policy: identified tracks cost no further encoding.
@@ -333,6 +338,7 @@ class PipelineRunner:
         enriched = []
         for obs in observations:
             state = self._face_state.setdefault(obs.track_id, _TrackFace())
+            state.last_seen_ts = obs.ts
             best = assignment.get(obs.track_id)
             if best is not None:
                 width = best.bbox[2] - best.bbox[0]
@@ -341,16 +347,19 @@ class PipelineRunner:
                 if best.quality > state.best_quality:
                     state.best_quality = best.quality
                     state.best_embedding = best.embedding
-                    # Size/quality gate: small or poor faces inform the
-                    # unresolved reason but must never produce an identity.
-                    if (self._match_enabled and self.gallery is not None
-                            and state.identity is None
-                            and width >= self._min_face_px and best.quality >= 0.6):
-                        hit = self.gallery.identify_with_model(
-                            best.embedding, self.encoder.model_id, self._match_threshold)
-                        if hit is not None:
-                            state.identity, state.identity_score = hit
-                            just_resolved.add(obs.track_id)
+                # Try identification on every gated face, not only on
+                # score improvements: detector score is a weak proxy for
+                # matchability, and a high-score non-match must not block a
+                # later slightly-lower-score true match. Size/quality gate:
+                # sub-gate faces inform the unresolved reason only.
+                if (self._match_enabled and self.gallery is not None
+                        and state.identity is None
+                        and width >= self._min_face_px and best.quality >= 0.6):
+                    hit = self.gallery.identify_with_model(
+                        best.embedding, self.encoder.model_id, self._match_threshold)
+                    if hit is not None:
+                        state.identity, state.identity_score = hit
+                        just_resolved.add(obs.track_id)
             enriched.append(replace(obs, identity=state.identity,
                                     identity_score=state.identity_score))
         return enriched, just_resolved
@@ -445,3 +454,13 @@ def _check_backends(nodes: list[NodeSpec], runtime: dict[str, Any]) -> None:
         if backend not in REGISTRY[n.type].backends:
             raise PipelineSpecError(
                 f"node {n.name} ({n.type}) has no {backend} backend for profile {profile}")
+    providers = runtime.get("providers")
+    if providers:
+        acceptable_first = {
+            "cpu": {"CPUExecutionProvider"},
+            "tensorrt": {"TensorrtExecutionProvider", "CUDAExecutionProvider"},
+        }.get(backend)
+        if acceptable_first is not None and providers[0] not in acceptable_first:
+            raise PipelineSpecError(
+                f"runtime provider {providers[0]!r} does not match profile {profile} "
+                f"(expected first provider one of {sorted(acceptable_first)})")

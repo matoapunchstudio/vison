@@ -34,6 +34,17 @@ def test_estimate_mixed_fleet_weights_face_cost():
     assert half_face["cameras"] == 8   # 1000 / (5 * (10 + 0.5*30)) = 8
 
 
+def test_estimate_includes_entry_burst_scenario():
+    summary = {
+        "detect.persons": {"count": 10, "mean_ms": 10.0, "p95_ms": 12.0},
+        "face.encode+match": {"count": 10, "mean_ms": 30.0, "p95_ms": 40.0},
+    }
+    est = estimate_cameras_per_box(summary, analytics_fps=5, face_cameras_fraction=0.5)
+    # Burst = every camera doing face work at once (class start): same as f=1.0
+    assert est["entry_burst_cameras"] == 5
+    assert any("burst" in a for a in est["assumptions"])
+
+
 def test_estimate_speedup_scales_linearly_and_is_named():
     summary = {"detect.persons": {"count": 1, "mean_ms": 100.0, "p95_ms": 100.0}}
     est = estimate_cameras_per_box(summary, analytics_fps=5, face_cameras_fraction=0.0,
